@@ -1,0 +1,13 @@
+# Render Blueprint: backend API only. Frontend = Vercel, database = Supabase.
+services:
+  - type: web
+    name: crednode-terra-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    plan: free
+    envVars:
+      - key: DATABASE_URL          # Supabase SESSION POOLER string (add ?sslmode=require if missing)
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS  # https://<project>.vercel.app  (comma-separated, no "*")
+        sync: false
