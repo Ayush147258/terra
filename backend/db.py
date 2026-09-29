@@ -1,15 +1,39 @@
 """PostgreSQL/PostGIS access. Working CRS: EPSG:4326 storage; metric areas via ::geography (no manual projection)."""
-import json, os
+import json, logging, os, re
 import psycopg
 from psycopg.rows import dict_row
 import reconciliation as R
 
+log = logging.getLogger("terra.db")
 class DatabaseUnavailable(Exception): pass
 SRID = 4326
-def url() -> str: return os.environ.get("DATABASE_URL", "postgresql://terra:terra_local_only@localhost:5432/terra")
+DEFAULT_URL = "postgresql://terra:terra_local_only@localhost:5432/terra"
+
+def _masked(u: str) -> str:
+    """DATABASE_URL with the password blanked out, safe to print in logs."""
+    return re.sub(r"(://[^:/@]+:)[^@]*(@)", r"\1***\2", u)
+
+def url() -> str:
+    """DATABASE_URL, OR discrete PG* vars (avoids all URL/percent-encoding pitfalls for passwords with
+    @ : / # % etc). Set PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD instead of DATABASE_URL if in doubt."""
+    if os.environ.get("PGHOST"):
+        from urllib.parse import quote
+        host, port, db, user, pw = (os.environ.get(k, d) for k, d in
+            [("PGHOST", ""), ("PGPORT", "5432"), ("PGDATABASE", "postgres"), ("PGUSER", "postgres"), ("PGPASSWORD", "")])
+        sslmode = os.environ.get("PGSSLMODE", "require")
+        return f"postgresql://{quote(user, safe='')}:{quote(pw, safe='')}@{host}:{port}/{db}?sslmode={sslmode}"
+    return os.environ.get("DATABASE_URL", DEFAULT_URL)
+
 def connect():
-    try: return psycopg.connect(url(), row_factory=dict_row)
-    except psycopg.OperationalError: raise DatabaseUnavailable("PostgreSQL is unreachable. Start the database and check DATABASE_URL.")
+    u = url()
+    try:
+        return psycopg.connect(u, row_factory=dict_row, connect_timeout=10)
+    except psycopg.OperationalError as e:
+        log.error("DB connection failed for %s: %s", _masked(u), e)
+        raise DatabaseUnavailable(
+            f"PostgreSQL is unreachable at {_masked(u)}. Check DATABASE_URL (or PGHOST/PGUSER/PGPASSWORD/PGDATABASE), "
+            f"that the host/port are correct, and that the password has no un-encoded special characters. Detail: {e}"
+        )
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS recorded_parcels(parcel_id text PRIMARY KEY, geom geometry(Polygon,4326) NOT NULL);
